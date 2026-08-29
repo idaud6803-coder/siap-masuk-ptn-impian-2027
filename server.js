@@ -6,7 +6,7 @@ const crypto = require('crypto');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
-const HOST = process.env.HOST || '127.0.0.1';
+const HOST = process.env.HOST || '0.0.0.0';
 const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '').trim();
 if (!ADMIN_PASSWORD) {
   console.error('ADMIN_PASSWORD belum diset. Jalankan server dengan password admin yang kuat.');
