@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SIAPP PTN — Admin</title>
+
+  <style>
+    body{
+      font-family:Arial,sans-serif;
+      max-width:1000px;
+      margin:40px auto;
+      padding:20px;
+      background:#f7f4ec;
+      color:#17263a
+    }
+
+    input,button{
+      padding:10px;
+      margin:5px
+    }
+
+    button{
+      cursor:pointer
+    }
+
+    button:disabled{
+      cursor:not-allowed;
+      opacity:.6
+    }
+
+    .row{
+      background:#fff;
+      padding:15px;
+      margin:10px 0;
+      border:1px solid #ddd
+    }
+
+    .row img{
+      max-width:240px;
+      display:block;
+      margin:10px 0
+    }
+
+    .empty{
+      background:#fff;
+      padding:15px;
+      margin-top:15px;
+      border:1px solid #ddd
+    }
+
+    .error{
+      color:#b00020
+    }
+
+    .success{
+      color:#176b2c
+    }
+
+    .loading{
+      color:#555
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>SIAPP PTN — Admin</h1>
+
+  <div>
+    <input
+      id="password"
+      type="password"
+      placeholder="Password admin"
+      autocomplete="current-password"
+    >
+
+    <button id="loginButton" type="button" onclick="login()">
+      Login
+    </button>
+  </div>
+
+  <div id="status"></div>
+
+  <div id="list"></div>
+
+  <script>
+    "use strict";
+
+    let token = "";
+    let loadingPayments = false;
+
+    const passwordInput = document.getElementById("password");
+    const loginButton = document.getElementById("loginButton");
+    const statusEl = document.getElementById("status");
+    const listEl = document.getElementById("list");
+
+    function setStatus(message, type = "") {
+      statusEl.textContent = message;
+      statusEl.className = type;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function formatRupiah(value) {
+      const amount = Number(value);
+
+      if (!Number.isFinite(amount)) {
+        return "Rp0";
+      }
+
+      return "Rp" + amount.toLocaleString("id-ID");
+    }
+
+    function formatDate(value) {
+      if (!value) return "-";
+
+      const date = new Date(value);
+
+      if (Number.isNaN(date.getTime())) {
+        return "-";
+      }
+
+      return date.toLocaleString("id-ID");
+    }
+
+    function statusText(value) {
+      const status = String(value || "").toLowerCase();
+
+      if (status === "approved") return "APPROVED";
+      if (status === "rejected") return "REJECTED";
+      if (status === "pending") return "PENDING";
+
+      return status.toUpperCase() || "-";
+    }
+
+    async function readJson(response) {
+      let data = null;
+
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error(
+          `Server mengirim respons yang tidak valid (HTTP ${response.status}).`
+        );
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          data?.message ||
+          `Permintaan gagal (HTTP ${response.status}).`
+        );
+      }
+
+      return data;
+    }
+
+    async function login() {
+      const password = passwordInput.value;
+
+      if (!password) {
+        setStatus("Masukkan password admin.", "error");
+        passwordInput.focus();
+        return;
+      }
+
+      loginButton.disabled = true;
+      setStatus("Sedang login...", "loading");
+
+      try {
+        const response = await fetch("/api/admin/login", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            password
+          })
+        });
+
+        const data = await readJson(response);
+
+        if (!data || !data.success || !data.token) {
+          throw new Error(
+            data?.message || "Login admin gagal."
+          );
+        }
+
+        token = data.token;
+
+        passwordInput.value = "";
+
+        setStatus("Login berhasil", "success");
+
+        await loadPayments();
+
+      } catch (error) {
+        token = "";
+
+        setStatus(
+          error?.message || "Gagal login ke server.",
+          "error"
+        );
+      } finally {
+        loginButton.disabled = false;
+      }
+    }
+
+    async function loadPayments() {
+      if (!token || loadingPayments) {
+        return;
+      }
+
+      loadingPayments = true;
+
+      listEl.innerHTML =
+        '<div class="loading">Memuat data pembayaran...</div>';
+
+      try {
+        const response = await fetch("/api/admin/payments", {
+          method: "GET",
+          headers: {
+            "x-admin-token": token
+          },
+          credentials: "same-origin",
+          cache: "no-store"
+        });
+
+        const rows = await readJson(response);
+
+        if (!Array.isArray(rows)) {
+          throw new Error(
+            "Format data pembayaran dari server tidak valid."
+          );
+        }
+
+        renderPayments(rows);
+
+      } catch (error) {
+
+        if (
+          error?.message &&
+          (
+            error.message.includes("401") ||
+            error.message.toLowerCase().includes("belum login")
+          )
+        ) {
+          token = "";
+        }
+
+        listEl.innerHTML = "";
+
+        setStatus(
+          error?.message || "Gagal mengambil data pembayaran.",
+          "error"
+        );
+
+      } finally {
+        loadingPayments = false;
+      }
+    }
+
+    function renderPayments(rows) {
+      if (!rows.length) {
+        listEl.innerHTML =
+          '<div class="empty">' +
+          'Belum ada pembayaran masuk.' +
+          '</div>';
+
+        return;
+      }
+
+      listEl.innerHTML = "";
+
+      rows.forEach((payment) => {
+        const row = document.createElement("div");
+        row.className = "row";
+
+        const requestId = String(payment?.requestId || "");
+        const status = String(payment?.status || "").toLowerCase();
+
+        row.innerHTML = `
+          <b>Request ID:</b>
+          <span>${escapeHtml(requestId || "-")}</span>
+          <br>
+
+          <b>Status:</b>
+          <span>${escapeHtml(statusText(status))}</span>
+          <br>
+
+          <b>Nominal:</b>
+          <span>${escapeHtml(formatRupiah(payment?.amount))}</span>
+          <br>
+
+          <b>Nama file:</b>
+          <span>${escapeHtml(payment?.originalName || "-")}</span>
+          <br>
+
+          <b>Dibuat:</b>
+          <span>${escapeHtml(formatDate(payment?.createdAt))}</span>
+          <br>
+
+          <b>Diperbarui:</b>
+          <span>${escapeHtml(formatDate(payment?.updatedAt))}</span>
+
+          <div class="proof-container">
+            <span class="loading">Memuat bukti pembayaran...</span>
+          </div>
+
+          <div class="actions"></div>
+        `;
+
+        const proofContainer =
+          row.querySelector(".proof-container");
+
+        const actions =
+          row.querySelector(".actions");
+
+        if (payment?.proofUrl && requestId) {
+          loadProof(
+            payment.proofUrl,
+            proofContainer
+          );
+        } else {
+          proofContainer.textContent =
+            "Bukti pembayaran tidak tersedia.";
+        }
+
+        if (status === "pending") {
+
+          const approveButton =
+            document.createElement("button");
+
+          approveButton.type = "button";
+          approveButton.textContent = "Approve";
+
+          approveButton.addEventListener(
+            "click",
+            () => act(requestId, "approve", approveButton)
+          );
+
+          const rejectButton =
+            document.createElement("button");
+
+          rejectButton.type = "button";
+          rejectButton.textContent = "Reject";
+
+          rejectButton.addEventListener(
+            "click",
+            () => act(requestId, "reject", rejectButton)
+          );
+
+          actions.appendChild(approveButton);
+          actions.appendChild(rejectButton);
+
+        } else {
+
+          const info =
+            document.createElement("span");
+
+          info.textContent =
+            `Transaksi sudah ${statusText(status)}.`;
+
+          actions.appendChild(info);
+        }
+
+        listEl.appendChild(row);
+      });
+    }
+
+    async function loadProof(url, container) {
+      try {
+
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            "x-admin-token": token
+          },
+          credentials: "same-origin",
+          cache: "no-store"
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            `Bukti tidak dapat dimuat (HTTP ${response.status}).`
+          );
+        }
+
+        const blob = await response.blob();
+
+        if (!blob || blob.size === 0) {
+          throw new Error(
+            "File bukti pembayaran kosong."
+          );
+        }
+
+        const objectUrl =
+          URL.createObjectURL(blob);
+
+        const img =
+          document.createElement("img");
+
+        img.alt =
+          "Bukti pembayaran";
+
+        img.src =
+          objectUrl;
+
+        img.onload = () => {
+          URL.revokeObjectURL(objectUrl);
+        };
+
+        img.onerror = () => {
+          URL.revokeObjectURL(objectUrl);
+
+          container.textContent =
+            "Bukti pembayaran gagal ditampilkan.";
+        };
+
+        container.innerHTML = "";
+        container.appendChild(img);
+
+      } catch (error) {
+
+        container.textContent =
+          error?.message ||
+          "Bukti pembayaran tidak dapat dimuat.";
+      }
+    }
+
+    async function act(requestId, action, button) {
+
+      if (!token) {
+        setStatus(
+          "Sesi admin tidak tersedia. Silakan login kembali.",
+          "error"
+        );
+        return;
+      }
+
+      if (!requestId) {
+        setStatus(
+          "Request ID transaksi tidak valid.",
+          "error"
+        );
+        return;
+      }
+
+      if (
+        action !== "approve" &&
+        action !== "reject"
+      ) {
+        setStatus(
+          "Aksi admin tidak valid.",
+          "error"
+        );
+        return;
+      }
+
+      if (action === "reject") {
+
+        const confirmed =
+          window.confirm(
+            "Yakin ingin menolak bukti pembayaran ini?"
+          );
+
+        if (!confirmed) {
+          return;
+        }
+      }
+
+      if (button) {
+        button.disabled = true;
+      }
+
+      try {
+
+        const response = await fetch(
+          `/api/admin/payments/${encodeURIComponent(requestId)}/${action}`,
+          {
+            method: "POST",
+            headers: {
+              "x-admin-token": token,
+              "Content-Type": "application/json"
+            },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              message:
+                action === "reject"
+                  ? "Bukti pembayaran ditolak."
+                  : "Pembayaran telah disetujui."
+            })
+          }
+        );
+
+        const data =
+          await readJson(response);
+
+        if (!data?.success) {
+          throw new Error(
+            data?.message ||
+            "Status pembayaran gagal diperbarui."
+          );
+        }
+
+        setStatus(
+          action === "approve"
+            ? "Pembayaran berhasil disetujui."
+            : "Pembayaran berhasil ditolak.",
+          "success"
+        );
+
+        await loadPayments();
+
+      } catch (error) {
+
+        setStatus(
+          error?.message ||
+          "Gagal memperbarui status pembayaran.",
+          "error"
+        );
+
+        if (button) {
+          button.disabled = false;
+        }
+      }
+    }
+
+    passwordInput.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key === "Enter") {
+          login();
+        }
+      }
+    );
+  </script>
+
+</body>
+</html>
